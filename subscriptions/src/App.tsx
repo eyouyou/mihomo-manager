@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
-import { Alert, App as AntApp, Button, Card, Empty, Form, Input, Modal, Skeleton, Space } from 'antd'
+import { Alert, App as AntApp, Button, Card, Empty, Form, Input, Modal, Progress, Skeleton, Space } from 'antd'
 import { Download, Layers, Link2, Pencil, Plus, RefreshCw, Trash2 } from './icons'
 
-type Subscription = { name: string; displayName?: string; source: 'remote' | 'local'; url?: string }
+import { formatBytes, formatDate, parseUserInfo, readDetails, writeDetails } from './subscriptionDetails'
+import type { Subscription, SubscriptionDetails } from './subscriptionDetails'
 type Draft = { name: string; url: string }
-type RefreshResult = { state: 'loading' | 'ok' | 'error'; count?: number; time?: string; detail?: string }
+type RefreshResult = { state: 'loading' | 'idle' | 'error'; detail?: string }
 type Selection = { current: string; available: string[] }
 
-async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+async function request<T>(path: string, method = 'GET', body?: unknown): Promise<{ data: T; headers: Headers }> {
   const response = await fetch(`/subscriptions${path}`, {
     method,
     headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
@@ -20,10 +21,15 @@ async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> 
     throw new Error('登录已过期，正在跳转。')
   }
   if (!response.ok) throw new Error(`请求失败（HTTP ${response.status}）`)
-  if (response.status === 204) return undefined as T
+  if (response.status === 204) return { data: undefined as T, headers: response.headers }
   const result = await response.json()
   if (result?.status === 'failed' || result?.status === 'error') throw new Error('Sub-Store 拒绝了请求。')
-  return (result?.status === 'success' ? result.data : result) as T
+  const data = (result?.status === 'success' ? result.data : result) as T
+  return { data, headers: response.headers }
+}
+
+async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+  return (await request<T>(path, method, body)).data
 }
 
 function parseUrl(value: string) {
@@ -36,6 +42,41 @@ function displayHost(value?: string) {
   try { return value ? parseUrl(value).hostname : '' } catch { return '' }
 }
 
+function subscriptionTitle(item: Subscription) {
+  return item.displayName || item['display-name'] || item.name
+}
+
+function Details({ item, details }: { item: Subscription; details?: SubscriptionDetails }) {
+  const { count, updatedAt, used, total, expiresAt } = details ?? {}
+  const hasQuota = used !== undefined && total !== undefined
+  const unknown = details ? '服务商未提供' : '等待更新'
+  const expired = expiresAt !== undefined && expiresAt <= Date.now()
+
+  return <dl className="subscription-details">
+    {item.source === 'remote' && <div className="subscription-quota">
+      <dt>流量用量</dt>
+      <dd>
+        {used === undefined && total === undefined ? unknown : <>
+          <strong>{used === undefined ? '用量未知' : formatBytes(used)}</strong>
+          <span> / {total === undefined ? '总量未知' : formatBytes(total)}</span>
+        </>}
+      </dd>
+      {hasQuota && <Progress percent={Math.min(100, used / total * 100)} showInfo={false}
+        aria-label="已用流量比例" strokeColor="var(--primary)" />}
+    </div>}
+    <div><dt>节点数量</dt><dd>{count ?? '等待更新'}</dd></div>
+    {item.source === 'remote' && <div>
+      <dt>到期时间</dt>
+      <dd className={expired ? 'error' : undefined}>
+        {expiresAt === undefined ? unknown : <><time dateTime={new Date(expiresAt).toISOString()}>{formatDate(expiresAt)}</time>{expired && '（已到期）'}</>}
+      </dd>
+    </div>}
+    <div><dt>上次成功更新</dt><dd>
+      {updatedAt === undefined ? '尚未检查' : <time dateTime={new Date(updatedAt).toISOString()}>{formatDate(updatedAt, true)}</time>}
+    </dd></div>
+  </dl>
+}
+
 export default function App() {
   const { message, modal } = AntApp.useApp()
   const [items, setItems] = useState<Subscription[] | null>(null)
@@ -45,6 +86,7 @@ export default function App() {
   const [importError, setImportError] = useState('')
   const [importing, setImporting] = useState(false)
   const [results, setResults] = useState<Record<string, RefreshResult>>({})
+  const [snapshots, setSnapshots] = useState(new Map<string, SubscriptionDetails | undefined>())
   const [editing, setEditing] = useState<Subscription | null>(null)
   const [saving, setSaving] = useState(false)
   const [editError, setEditError] = useState('')
@@ -55,7 +97,12 @@ export default function App() {
   const [switching, setSwitching] = useState('')
   async function load() {
     setLoadError('')
-    try { setItems(await api<Subscription[]>('/api/subs')) }
+    try {
+      const subscriptions = await api<Subscription[]>('/api/subs')
+      const cached = await Promise.all(subscriptions.map(async item => [item.name, await readDetails(item)] as const))
+      setSnapshots(new Map(cached))
+      setItems(subscriptions)
+    }
     catch (error) { setLoadError(error instanceof Error ? error.message : '无法加载订阅。') }
   }
 
@@ -86,9 +133,12 @@ export default function App() {
   async function refresh(item: Subscription) {
     setResults(current => ({ ...current, [item.name]: { state: 'loading' } }))
     try {
-      const nodes = await api<unknown[]>(`/download/${encodeURIComponent(item.name)}/JSON?noCache=true`)
+      const { data: nodes, headers } = await request<unknown[]>(`/download/${encodeURIComponent(item.name)}/JSON?noCache=true`)
       if (!Array.isArray(nodes) || nodes.length === 0) throw new Error('来源没有返回可用节点。')
-      setResults(current => ({ ...current, [item.name]: { state: 'ok', count: nodes.length, time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) } }))
+      const details = { count: nodes.length, updatedAt: Date.now(), ...parseUserInfo(headers.get('subscription-userinfo')) }
+      await writeDetails(item, details)
+      setSnapshots(current => new Map(current).set(item.name, details))
+      setResults(current => ({ ...current, [item.name]: { state: 'idle' } }))
     } catch (error) {
       const detail = error instanceof Error && error.name === 'TimeoutError'
         ? '拉取超时。请稍后重试。'
@@ -107,8 +157,8 @@ export default function App() {
     try { source = parseUrl(url) } catch { setImportError('请输入有效的 HTTP 或 HTTPS 订阅地址。'); return }
     const existing = items.find(item => item.url?.trim() === url.trim())
     if (existing) {
-      setImportError(`已添加为「${existing.displayName || existing.name}」。`)
-      void refresh(existing)
+      setImportError(`已添加为「${subscriptionTitle(existing)}」。`)
+      if (!allBusy && results[existing.name]?.state !== 'loading') void refresh(existing)
       return
     }
     const label = (source.searchParams.get('filename')?.replace(/\.(yaml|yml)$/i, '') || source.hostname).slice(0, 60)
@@ -135,7 +185,7 @@ export default function App() {
   }
 
   function edit(item: Subscription) {
-    form.setFieldsValue({ name: item.displayName || item.name, url: item.url || '' })
+    form.setFieldsValue({ name: subscriptionTitle(item), url: item.url || '' })
     setEditError('')
     setEditing(item)
   }
@@ -153,6 +203,7 @@ export default function App() {
       const updated = { ...original, displayName: draft.name.trim(), 'display-name': draft.name.trim(),
         ...(original.source === 'remote' ? { url: draft.url.trim() } : {}) }
       await api(path, 'PATCH', updated)
+      if (original.url !== updated.url) await writeDetails(original)
       setEditing(null)
       await load()
       void refresh(updated)
@@ -162,11 +213,16 @@ export default function App() {
 
   function remove(item: Subscription) {
     modal.confirm({
-      title: `删除「${item.displayName || item.name}」？`,
+      title: `删除「${subscriptionTitle(item)}」？`,
       content: '删除后，需要重新导入才能恢复该订阅。',
       okText: '删除', cancelText: '取消', okButtonProps: { danger: true },
       async onOk() {
-        try { await api(`/api/sub/${encodeURIComponent(item.name)}`, 'DELETE'); await load() }
+        try {
+          await api(`/api/sub/${encodeURIComponent(item.name)}`, 'DELETE')
+          await writeDetails(item)
+          setResults(current => ({ ...current, [item.name]: { state: 'idle' } }))
+          await load()
+        }
         catch { message.error('删除失败，请稍后重试。'); throw new Error('删除失败') }
       },
     })
@@ -209,21 +265,19 @@ export default function App() {
             {items?.map(item => {
               const status = results[item.name]
               const busy = status?.state === 'loading'
-              const title = item.displayName || item.name
+              const title = subscriptionTitle(item)
               const active = selection?.current === item.name
               const selectable = selection?.available.includes(item.name)
               return <Card key={item.name} className={active ? 'subscription-card is-selected' : 'subscription-card'}>
                 <div className="card-top">
                   <span className="source-icon"><Layers /></span>
-                  <span className="identity"><strong>{title}</strong><small>{displayHost(item.url) || '本地节点列表'}</small></span>
+                  <span className="identity"><strong>{title}</strong><small>{item.source === 'remote' ? displayHost(item.url) || '远程订阅' : '本地节点列表'}</small></span>
                   <span className="selection-indicator" aria-live="polite">{active ? '当前使用' : item.source === 'remote' ? '远程订阅' : '本地订阅'}</span>
                 </div>
-                <div className="result" aria-live="polite">
-                  {busy ? '正在拉取节点…' : status?.state === 'ok'
-                    ? <span className="success">{status.count} 个节点 · {status.time} 刷新</span>
-                    : status?.state === 'error'
-                      ? <><strong className="error">拉取失败</strong><p>{status.detail}</p></>
-                      : '尚未检查'}
+                <Details item={item} details={snapshots.get(item.name)} />
+                <div className="subscription-status" aria-live="polite">
+                  {busy && <p>正在拉取节点…</p>}
+                  {status?.state === 'error' && <p><strong className="error">拉取失败。</strong>{status.detail}</p>}
                 </div>
                 <Space wrap>
                   {selectable && !active && <Button type="primary" loading={switching === item.name}
@@ -232,8 +286,8 @@ export default function App() {
                       content: '切换后，路由器通过此订阅策略组建立的新连接将使用所选订阅。',
                       okText: '切换订阅', cancelText: '取消', onOk: () => activate(item),
                     })}>使用此订阅</Button>}
-                  <Button icon={<RefreshCw />} loading={busy} disabled={allBusy} onClick={() => void refresh(item)} aria-label={`刷新 ${title}`}>更新</Button>
-                  <Button type="text" icon={<Pencil />} onClick={() => edit(item)} aria-label={`编辑 ${title}`}>编辑</Button>
+                  <Button icon={<RefreshCw />} loading={busy} disabled={busy || allBusy} onClick={() => void refresh(item)} aria-label={`刷新 ${title}`}>更新</Button>
+                  <Button type="text" icon={<Pencil />} disabled={busy || allBusy} onClick={() => edit(item)} aria-label={`编辑 ${title}`}>编辑</Button>
                   <Button type="text" icon={<Download />} href={`/subscriptions/download/${encodeURIComponent(item.name)}/ClashMeta`} download={`${item.name}.yaml`}>导出节点</Button>
                   <Button type="text" danger disabled={busy || allBusy || selectable || !!switching} icon={<Trash2 />} onClick={() => remove(item)} aria-label={`删除 ${title}`}>删除</Button>
                 </Space>

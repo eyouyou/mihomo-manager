@@ -25,7 +25,7 @@ body { margin: 0; }
 .workspace { padding: 48px 0 56px; }
 .intro { margin-bottom: 26px; }
 .intro h1 { font-size: clamp(28px, 4vw, 40px); margin: 0 0 8px; font-weight: 750; letter-spacing: -.045em; }
-.intro p, .identity p, .result p { margin: 0; color: var(--muted); }
+.intro p, .identity p, .subscription-status p { margin: 0; color: var(--muted); }
 .import-card, .subscription-card { border-color: var(--line); box-shadow: 0 2px 8px #18253d08; }
 .import-card label { display: block; margin-bottom: 10px; font-weight: 650; }
 .import-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
@@ -50,7 +50,14 @@ body { margin: 0; }
 .source-icon { width: 44px; height: 44px; font-size: 19px; }
 .identity { min-width: 0; flex: 1; overflow-wrap: anywhere; }
 .identity h3 { margin: 0 0 3px; font-size: 17px; }
-.result { min-height: 64px; margin: 18px 0 12px; padding: 10px 12px; border-radius: 8px; background: var(--canvas); color: var(--muted); }
+.subscription-details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 16px 0 12px; padding: 12px; border-radius: 8px; background: var(--canvas); }
+.subscription-details dt { font-size: 12px; color: var(--muted); }
+.subscription-details dd { margin: 3px 0 0; overflow-wrap: anywhere; }
+.subscription-quota { grid-column: 1 / -1; }
+.subscription-quota dd strong { font-size: 17px; font-weight: 700; }
+.subscription-quota dd span { color: var(--muted); }
+.subscription-status p { margin-bottom: 12px; }
+.subscription-status strong { margin-right: 4px; }
 .error { color: var(--error); }
 .success { color: var(--success); font-weight: 650; }
 :focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
