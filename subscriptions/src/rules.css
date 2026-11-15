@@ -1,0 +1,6 @@
+.rules-page { max-width: 1440px; margin-inline: auto; padding: 24px clamp(12px, 4vw, 48px) 48px; }
+.rules-page h1 { margin-block: 12px 0; }
+.rules-page p { margin-block: 6px 18px; }
+.rules-card, .rules-error { margin-top: 16px; }
+.rules-toolbar { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+.rules-page code { overflow-wrap: anywhere; }

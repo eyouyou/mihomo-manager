@@ -1,0 +1,14 @@
+<style>
+  #management-link { position: fixed; right: 20px; bottom: max(20px, env(safe-area-inset-bottom)); z-index: 40; max-width: calc(100vw - 40px); display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px; border: 1px solid #7886a455; border-radius: 12px; background: var(--color-base-100, #fff); color: var(--color-base-content, #18253d); box-shadow: 0 3px 16px #0b17332e; font: 600 14px system-ui; }
+  #management-link [hidden] { display: none; }
+  #management-link label { display: flex; align-items: center; gap: 8px; padding-inline-start: 6px; }
+  #management-link select { min-height: 44px; padding: 0 10px; border: 1px solid #7886a477; border-radius: 8px; color: inherit; background: inherit; }
+  #management-link a { display: grid; place-items: center; min-height: 44px; padding: 0 12px; border-radius: 8px; background: #234bc9; color: #fff; text-decoration: none; }
+  #management-link :focus-visible { outline: 2px solid #5275e8; outline-offset: 2px; }
+  #management-link output { flex-basis: 100%; padding-inline: 6px; font-weight: 500; }
+  #management-link output:empty { display: none; }
+  @media (max-width: 480px) { #management-link { right: 10px; bottom: max(70px, calc(env(safe-area-inset-bottom) + 60px)); max-width: calc(100vw - 20px); } }
+</style>
+<aside id="management-link" aria-label="Mihomo">
+  <a href="/management/">Mihomo 管理</a>
+</aside>

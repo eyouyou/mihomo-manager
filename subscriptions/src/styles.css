@@ -1,0 +1,74 @@
+:root {
+  color-scheme: light;
+  --canvas: #f4f6fb;
+  --surface: #fff;
+  --ink: #18253d;
+  --muted: #52617a;
+  --line: #e1e7f1;
+  --primary: #234bc9;
+  --tint: #eaf0ff;
+  --success: #17663e;
+  --error: #a42630;
+  font-family: system-ui, "Microsoft YaHei", sans-serif;
+  color: var(--ink);
+  background: var(--canvas);
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+.bar { background: var(--surface); border-bottom: 1px solid var(--line); }
+.bar-inner, .workspace { width: min(100% - 40px, 1120px); margin: 0 auto; }
+.bar-inner { min-height: 70px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.brand { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 650; }
+.brand-icon, .source-icon { display: grid; place-items: center; flex: none; color: var(--primary); background: var(--tint); border-radius: 10px; }
+.brand-icon { width: 34px; height: 34px; font-size: 17px; }
+.brand-divider { width: 1px; height: 17px; background: var(--line); }
+.workspace { padding: 48px 0 56px; }
+.intro { margin-bottom: 26px; }
+.intro h1 { font-size: clamp(28px, 4vw, 40px); margin: 0 0 8px; font-weight: 750; letter-spacing: -.045em; }
+.intro p, .identity p, .result p { margin: 0; color: var(--muted); }
+.import-card, .subscription-card { border-color: var(--line); box-shadow: 0 2px 8px #18253d08; }
+.import-card label { display: block; margin-bottom: 10px; font-weight: 650; }
+.import-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+.ant-btn { min-height: 44px; min-width: 44px; }
+.ant-input-affix-wrapper, input.ant-input { min-height: 44px; }
+.ant-input-affix-wrapper input.ant-input { min-height: 0; }
+.subscriptions { margin-top: 34px; }
+.section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.section-heading h2 { margin: 0; font-size: 20px; }
+.section-heading h2 span { font-size: 13px; background: var(--tint); color: var(--primary); padding: 3px 8px; border-radius: 20px; margin-left: 6px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 16px; }
+.card-top { display: flex; align-items: flex-start; gap: 12px; }
+.card-select { width: 100%; min-height: 52px; border: 0; background: transparent; color: inherit; text-align: start; font: inherit; padding: 0; cursor: pointer; border-radius: 8px; }
+.card-select:disabled { cursor: wait; }
+.card-select:not(:disabled):hover .selection-indicator { background: var(--tint); color: var(--primary); }
+.subscription-card.is-selected { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
+.identity strong, .identity small { display: block; }
+.identity strong { font-size: 17px; margin-bottom: 3px; }
+.identity small { color: var(--muted); font-size: 13px; }
+.selection-indicator { flex: none; padding: 3px 8px; border-radius: 6px; color: var(--muted); font-size: 13px; }
+.is-selected .selection-indicator { color: var(--primary); background: var(--tint); font-weight: 650; }
+.source-icon { width: 44px; height: 44px; font-size: 19px; }
+.identity { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.identity h3 { margin: 0 0 3px; font-size: 17px; }
+.result { min-height: 64px; margin: 18px 0 12px; padding: 10px 12px; border-radius: 8px; background: var(--canvas); color: var(--muted); }
+.error { color: var(--error); }
+.success { color: var(--success); font-weight: 650; }
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+@media (max-width: 480px) {
+  .bar-inner, .workspace { width: calc(100% - 28px); }
+  .workspace { padding-top: 30px; }
+  .import-row { grid-template-columns: 1fr; }
+  .import-row button { justify-self: stretch; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+.import-card { margin-bottom: 16px; }
+.import-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+@media (max-width: 560px) {
+  .section-heading { flex-wrap: wrap; }
+  .import-row { grid-template-columns: 1fr 1fr; }
+  .import-row > .ant-input-affix-wrapper { grid-column: 1 / -1; }
+}
+
+.management-tabs > .ant-tabs-nav { padding-inline: max(12px, calc((100% - 1120px) / 2)); }
