@@ -1,15 +1,18 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { Alert, App as AntApp, Button, Card, Empty, Form, Input, Modal, Progress, Skeleton, Space } from 'antd'
+import { Alert, App as AntApp, Button, Card, Empty, Form, Input, InputNumber, Modal, Progress, Skeleton, Space } from 'antd'
 import { Download, Layers, Link2, Pencil, Plus, RefreshCw, Trash2 } from './icons'
 
-import { formatBytes, formatDate, parseUserInfo, readDetails, writeDetails } from './subscriptionDetails'
+import { formatBytes, formatDate } from './subscriptionDetails'
 import type { Subscription, SubscriptionDetails } from './subscriptionDetails'
 type Draft = { name: string; url: string }
 type RefreshResult = { state: 'loading' | 'idle' | 'error'; detail?: string }
+const detailsPath = '/api/subscription-details'
+const maximumInterval = 30 * 24 * 60
+
 type Selection = { current: string; available: string[] }
 
-async function request<T>(path: string, method = 'GET', body?: unknown): Promise<{ data: T; headers: Headers }> {
+async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   const response = await fetch(`/subscriptions${path}`, {
     method,
     headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
@@ -21,15 +24,10 @@ async function request<T>(path: string, method = 'GET', body?: unknown): Promise
     throw new Error('登录已过期，正在跳转。')
   }
   if (!response.ok) throw new Error(`请求失败（HTTP ${response.status}）`)
-  if (response.status === 204) return { data: undefined as T, headers: response.headers }
+  if (response.status === 204) return undefined as T
   const result = await response.json()
   if (result?.status === 'failed' || result?.status === 'error') throw new Error('Sub-Store 拒绝了请求。')
-  const data = (result?.status === 'success' ? result.data : result) as T
-  return { data, headers: response.headers }
-}
-
-async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-  return (await request<T>(path, method, body)).data
+  return (result?.status === 'success' ? result.data : result) as T
 }
 
 function parseUrl(value: string) {
@@ -47,9 +45,10 @@ function subscriptionTitle(item: Subscription) {
 }
 
 function Details({ item, details }: { item: Subscription; details?: SubscriptionDetails }) {
-  const { count, updatedAt, used, total, expiresAt } = details ?? {}
+  const { count, updatedAt, used, total, expiresAt } = details?.snapshot ?? {}
+  const nextUpdateAt = details?.nextUpdateAt
   const hasQuota = used !== undefined && total !== undefined
-  const unknown = details ? '服务商未提供' : '等待更新'
+  const unknown = details?.snapshot ? '服务商未提供' : '等待更新'
   const expired = expiresAt !== undefined && expiresAt <= Date.now()
 
   return <dl className="subscription-details">
@@ -74,6 +73,13 @@ function Details({ item, details }: { item: Subscription; details?: Subscription
     <div><dt>上次成功更新</dt><dd>
       {updatedAt === undefined ? '尚未检查' : <time dateTime={new Date(updatedAt).toISOString()}>{formatDate(updatedAt, true)}</time>}
     </dd></div>
+    {item.source === 'remote' && <div>
+      <dt>下次更新</dt>
+      <dd>{details?.updating ? '正在更新' : nextUpdateAt !== undefined
+        ? <><time dateTime={new Date(nextUpdateAt).toISOString()}>{formatDate(nextUpdateAt, true)}</time>
+          <small className="subscription-interval">每 {details?.intervalMinutes} 分钟</small></>
+        : details ? '自动更新已关闭' : '等待加载'}</dd>
+    </div>}
   </dl>
 }
 
@@ -86,7 +92,13 @@ export default function App() {
   const [importError, setImportError] = useState('')
   const [importing, setImporting] = useState(false)
   const [results, setResults] = useState<Record<string, RefreshResult>>({})
-  const [snapshots, setSnapshots] = useState(new Map<string, SubscriptionDetails | undefined>())
+  const [details, setDetails] = useState<Record<string, SubscriptionDetails>>({})
+  const [detailsError, setDetailsError] = useState('')
+  const detailsVersion = useRef(0)
+  const [scheduledItem, setScheduledItem] = useState<Subscription | null>(null)
+  const [interval, setIntervalMinutes] = useState<number | null>(0)
+  const [scheduleSaving, setScheduleSaving] = useState(false)
+  const [scheduleError, setScheduleError] = useState('')
   const [editing, setEditing] = useState<Subscription | null>(null)
   const [saving, setSaving] = useState(false)
   const [editError, setEditError] = useState('')
@@ -97,13 +109,20 @@ export default function App() {
   const [switching, setSwitching] = useState('')
   async function load() {
     setLoadError('')
-    try {
-      const subscriptions = await api<Subscription[]>('/api/subs')
-      const cached = await Promise.all(subscriptions.map(async item => [item.name, await readDetails(item)] as const))
-      setSnapshots(new Map(cached))
-      setItems(subscriptions)
-    }
+    try { setItems(await api<Subscription[]>('/api/subs')) }
     catch (error) { setLoadError(error instanceof Error ? error.message : '无法加载订阅。') }
+  }
+
+  async function loadDetails() {
+    const version = ++detailsVersion.current
+    try {
+      const records = await api<Record<string, SubscriptionDetails>>(detailsPath)
+      if (version !== detailsVersion.current) return
+      setDetails(records)
+      setDetailsError('')
+    } catch {
+      if (version === detailsVersion.current) setDetailsError('无法读取服务端订阅信息。')
+    }
   }
 
   async function loadSelection() {
@@ -115,7 +134,16 @@ export default function App() {
     }
   }
 
-  useEffect(() => { void load(); void loadSelection() }, [])
+  useEffect(() => {
+    void load()
+    void loadDetails()
+    void loadSelection()
+    const timer = window.setInterval(() => void loadDetails(), 15000)
+    return () => {
+      window.clearInterval(timer)
+      detailsVersion.current++
+    }
+  }, [])
 
   async function activate(item: Subscription) {
     setSwitching(item.name)
@@ -133,18 +161,14 @@ export default function App() {
   async function refresh(item: Subscription) {
     setResults(current => ({ ...current, [item.name]: { state: 'loading' } }))
     try {
-      const { data: nodes, headers } = await request<unknown[]>(`/download/${encodeURIComponent(item.name)}/JSON?noCache=true`)
-      if (!Array.isArray(nodes) || nodes.length === 0) throw new Error('来源没有返回可用节点。')
-      const details = { count: nodes.length, updatedAt: Date.now(), ...parseUserInfo(headers.get('subscription-userinfo')) }
-      await writeDetails(item, details)
-      setSnapshots(current => new Map(current).set(item.name, details))
+      const record = await api<SubscriptionDetails>(detailsPath + '/refresh', 'POST', { name: item.name })
+      detailsVersion.current++
+      setDetails(current => ({ ...current, [item.name]: record }))
       setResults(current => ({ ...current, [item.name]: { state: 'idle' } }))
     } catch (error) {
       const detail = error instanceof Error && error.name === 'TimeoutError'
         ? '拉取超时。请稍后重试。'
-        : item.source === 'remote'
-          ? '订阅源未返回可用节点。请检查链接，或从服务商后台复制新链接。'
-          : '无法读取本地订阅的节点。'
+        : '无法完成更新，请稍后重试。'
       setResults(current => ({ ...current, [item.name]: { state: 'error', detail } }))
     }
   }
@@ -184,6 +208,29 @@ export default function App() {
     finally { setAllBusy(false) }
   }
 
+  function editSchedule(item: Subscription) {
+    setScheduledItem(item)
+    setIntervalMinutes(Object.hasOwn(details, item.name) ? details[item.name].intervalMinutes : 0)
+    setScheduleError('')
+  }
+
+  async function saveSchedule() {
+    if (!scheduledItem || interval === null || !Number.isInteger(interval) || interval < 0 || interval > maximumInterval) return
+    setScheduleSaving(true)
+    setScheduleError('')
+    try {
+      const record = await api<SubscriptionDetails>(detailsPath + '/schedule', 'PUT',
+        { name: scheduledItem.name, intervalMinutes: interval })
+      detailsVersion.current++
+      setDetails(current => ({ ...current, [scheduledItem.name]: record }))
+      setScheduledItem(null)
+    } catch (error) {
+      setScheduleError(error instanceof Error ? error.message : '无法保存自动更新设置。')
+    } finally {
+      setScheduleSaving(false)
+    }
+  }
+
   function edit(item: Subscription) {
     form.setFieldsValue({ name: subscriptionTitle(item), url: item.url || '' })
     setEditError('')
@@ -203,10 +250,10 @@ export default function App() {
       const updated = { ...original, displayName: draft.name.trim(), 'display-name': draft.name.trim(),
         ...(original.source === 'remote' ? { url: draft.url.trim() } : {}) }
       await api(path, 'PATCH', updated)
-      if (original.url !== updated.url) await writeDetails(original)
       setEditing(null)
       await load()
-      void refresh(updated)
+      void loadDetails()
+      if (original.url !== updated.url) void refresh(updated)
     } catch (error) { setEditError(error instanceof Error ? error.message : '保存失败。') }
     finally { setSaving(false) }
   }
@@ -219,9 +266,9 @@ export default function App() {
       async onOk() {
         try {
           await api(`/api/sub/${encodeURIComponent(item.name)}`, 'DELETE')
-          await writeDetails(item)
           setResults(current => ({ ...current, [item.name]: { state: 'idle' } }))
           await load()
+          void loadDetails()
         }
         catch { message.error('删除失败，请稍后重试。'); throw new Error('删除失败') }
       },
@@ -254,6 +301,7 @@ export default function App() {
           </form>
         </Card>}
           {loadError && <Alert type="error" showIcon title={loadError} action={<Button onClick={() => void load()}>重试</Button>} />}
+          {detailsError && <Alert type="warning" showIcon title={detailsError} action={<Button onClick={() => void loadDetails()}>重试</Button>} />}
           {selectionError && <Alert type="error" showIcon title={selectionError}
             action={<Button disabled={!!switching} onClick={() => void loadSelection()}>重试</Button>} />}
           {selection && !selection.available.length && <Alert type="warning" showIcon title="路由器尚未绑定可切换的订阅。" />}
@@ -264,7 +312,8 @@ export default function App() {
           <div className="cards">
             {items?.map(item => {
               const status = results[item.name]
-              const busy = status?.state === 'loading'
+              const record = Object.hasOwn(details, item.name) ? details[item.name] : undefined
+              const busy = status?.state === 'loading' || !!record?.updating
               const title = subscriptionTitle(item)
               const active = selection?.current === item.name
               const selectable = selection?.available.includes(item.name)
@@ -274,10 +323,10 @@ export default function App() {
                   <span className="identity"><strong>{title}</strong><small>{item.source === 'remote' ? displayHost(item.url) || '远程订阅' : '本地节点列表'}</small></span>
                   <span className="selection-indicator" aria-live="polite">{active ? '当前使用' : item.source === 'remote' ? '远程订阅' : '本地订阅'}</span>
                 </div>
-                <Details item={item} details={snapshots.get(item.name)} />
+                <Details item={item} details={record} />
                 <div className="subscription-status" aria-live="polite">
                   {busy && <p>正在拉取节点…</p>}
-                  {status?.state === 'error' && <p><strong className="error">拉取失败。</strong>{status.detail}</p>}
+                  {!busy && (status?.detail || record?.lastError) && <p><strong className="error">拉取失败。</strong>{status?.detail || record?.lastError}</p>}
                 </div>
                 <Space wrap>
                   {selectable && !active && <Button type="primary" loading={switching === item.name}
@@ -287,6 +336,7 @@ export default function App() {
                       okText: '切换订阅', cancelText: '取消', onOk: () => activate(item),
                     })}>使用此订阅</Button>}
                   <Button icon={<RefreshCw />} loading={busy} disabled={busy || allBusy} onClick={() => void refresh(item)} aria-label={`刷新 ${title}`}>更新</Button>
+                  {item.source === 'remote' && <Button type="text" onClick={() => editSchedule(item)} aria-label={`自动更新设置 ${title}`}>自动更新设置</Button>}
                   <Button type="text" icon={<Pencil />} disabled={busy || allBusy} onClick={() => edit(item)} aria-label={`编辑 ${title}`}>编辑</Button>
                   <Button type="text" icon={<Download />} href={`/subscriptions/download/${encodeURIComponent(item.name)}/ClashMeta`} download={`${item.name}.yaml`}>导出节点</Button>
                   <Button type="text" danger disabled={busy || allBusy || selectable || !!switching} icon={<Trash2 />} onClick={() => remove(item)} aria-label={`删除 ${title}`}>删除</Button>
@@ -296,6 +346,18 @@ export default function App() {
           </div>
         </section>
       </main>
+      <Modal title={scheduledItem ? `自动更新 · ${subscriptionTitle(scheduledItem)}` : '自动更新'} open={scheduledItem !== null}
+        confirmLoading={scheduleSaving} onCancel={() => { if (!scheduleSaving) setScheduledItem(null) }}
+        okText="保存" cancelText="取消" onOk={() => void saveSchedule()}
+        okButtonProps={{ disabled: interval === null || !Number.isInteger(interval) || interval < 0 || interval > maximumInterval }}>
+        <Form layout="vertical">
+          <Form.Item label="更新间隔（分钟）" htmlFor="subscription-interval" extra="填 0 关闭自动更新。最大间隔为 30 天。">
+            <InputNumber id="subscription-interval" min={0} max={maximumInterval} step={1} value={interval}
+              onChange={setIntervalMinutes} disabled={scheduleSaving} />
+          </Form.Item>
+        </Form>
+        {scheduleError && <Alert type="error" showIcon title={scheduleError} />}
+      </Modal>
       <Modal title="编辑订阅" open={editing !== null} onCancel={() => setEditing(null)}
         onOk={() => form.submit()} okText="保存" cancelText="取消" confirmLoading={saving}>
         <Form form={form} layout="vertical" onFinish={save}>

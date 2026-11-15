@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -126,6 +127,24 @@ rules: ['MATCH,Sub-Store 订阅']
 			{"name": "second", "displayName": "测试订阅 B", "source": "remote"},
 		})
 	})
+	var pulls atomic.Int32
+	mux.HandleFunc("/download/first/JSON", func(w http.ResponseWriter, r *http.Request) {
+		switch pulls.Add(1) {
+		case 1:
+			w.Header().Set("subscription-userinfo", "upload=0; download=1073741824; total=4294967296; expire=946684800")
+			w.Write([]byte(`[{"name":"node-1"},{"name":"node-2"}]`))
+		case 2:
+			http.Error(w, "fixture update failed", http.StatusBadGateway)
+		default:
+			w.Write([]byte(`[{"name":"node-1"}]`))
+		}
+	})
+	subscriptionBackend := httptest.NewServer(mux)
+	defer subscriptionBackend.Close()
+	refresh, err := openSubscriptionRefresh(subscriptionBackend.URL, filepath.Join(dir, "subscription-details.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	dist := os.Getenv("SUBSCRIPTION_TEST_DIST")
 	if dist == "" {
 		dist = "../subscriptions/dist"
@@ -176,7 +195,7 @@ rules: ['MATCH,Sub-Store 订阅']
 				serveManagement(w, r, dist, http.StripPrefix(managementPath, http.FileServer(http.Dir(dist))))
 				return
 			}
-			serveSubscriptions(w, r, "/subscriptions", filepath.Join(dist, "index.html"), assets, mux, s, true,
+			serveSubscriptions(w, r, "/subscriptions", filepath.Join(dist, "index.html"), assets, mux, s, refresh, true,
 				r.Header.Get("Origin") == "http://"+r.Host && r.Header.Get("Origin") != "")
 		}
 	}

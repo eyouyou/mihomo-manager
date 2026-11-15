@@ -56,6 +56,7 @@ body { margin: 0; }
 .subscription-quota { grid-column: 1 / -1; }
 .subscription-quota dd strong { font-size: 17px; font-weight: 700; }
 .subscription-quota dd span { color: var(--muted); }
+.subscription-interval { display: block; color: var(--muted); }
 .subscription-status p { margin-bottom: 12px; }
 .subscription-status strong { margin-right: 4px; }
 .error { color: var(--error); }

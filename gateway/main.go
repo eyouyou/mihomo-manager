@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	_ "embed"
 	"encoding/hex"
 	"log"
@@ -55,6 +56,18 @@ func main() {
 	}
 	dashboardAssets := http.StripPrefix("/ui", http.FileServer(http.Dir(root+"zashboard/dist")))
 	subscriptionAPI := httputil.NewSingleHostReverseProxy(subscriptionTarget)
+	stateDir := os.Getenv("SUBSCRIPTION_STATE_DIR")
+	if stateDir == "" {
+		stateDir = filepath.Join(root, "subscription-state")
+	}
+	if err := os.MkdirAll(stateDir, 0700); err != nil {
+		log.Fatal(err)
+	}
+	refresh, err := openSubscriptionRefresh(subscriptionTarget.String(), filepath.Join(stateDir, "details.json"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	go refresh.run(context.Background())
 	selection := subscriptionSelection{
 		controller: &http.Client{Transport: transport, Timeout: 6 * time.Second},
 		routerURL:  router.String(),
@@ -189,7 +202,7 @@ self.addEventListener('activate', event => event.waitUntil((async () => {
 			}
 			if subscriptions {
 				serveSubscriptions(w, r, subscriptionPath, root+"management-ui/index.html",
-					managementUI, subscriptionAPI, &selection, staticAsset, trustedOrigin)
+					managementUI, subscriptionAPI, &selection, refresh, staticAsset, trustedOrigin)
 				return
 			}
 			if primary {

@@ -18,12 +18,14 @@ import (
 const subscriptionSelector = "Sub-Store 订阅"
 
 func serveSubscriptions(w http.ResponseWriter, r *http.Request, prefix, index string, assets, api http.Handler,
-	selection *subscriptionSelection, staticAsset, trustedOrigin bool) {
+	selection *subscriptionSelection, refresh *subscriptionRefresh, staticAsset, trustedOrigin bool) {
 	suffix := strings.TrimPrefix(r.URL.Path, prefix)
 	read := r.Method == http.MethodGet || r.Method == http.MethodHead
 	switch {
 	case suffix == "/api/active-subscription":
 		selection.serve(w, r, trustedOrigin)
+	case suffix == subscriptionDetailsPath || strings.HasPrefix(suffix, subscriptionDetailsPath+"/"):
+		refresh.serve(w, r, suffix, trustedOrigin)
 	case read && suffix == "":
 		http.Redirect(w, r, prefix+"/", http.StatusSeeOther)
 	case read && suffix == "/":

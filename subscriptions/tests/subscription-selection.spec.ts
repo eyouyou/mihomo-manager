@@ -37,23 +37,11 @@ test('shows unavailable state when the router has no bindings', async ({ page })
   await expect(page.getByRole('button', { name: '使用此订阅' })).toHaveCount(0)
 })
 
-test('shows subscription usage and keeps the last successful details after a failed refresh', async ({ page }) => {
-  let refreshes = 0
-  await page.route('**/download/**/JSON?noCache=true', async route => {
-    refreshes++
-    if (refreshes === 2) {
-      await route.fulfill({ status: 502 })
-      return
-    }
-    await route.fulfill({
-      json: [{ name: 'node-1' }, { name: 'node-2' }],
-      headers: { 'subscription-userinfo': 'upload=0; download=1073741824; total=4294967296; expire=946684800' },
-    })
-  })
+test('shows server details in a new browser context and saves the next update time', async ({ page, browser }) => {
   await page.goto(base + '/management/')
   const first = page.locator('.subscription-card').filter({ hasText: '测试订阅 A' })
+  await expect(first.getByText('自动更新已关闭')).toBeVisible()
   await expect(first.getByText('尚未检查')).toBeVisible()
-  expect(refreshes).toBe(0)
 
   const refresh = first.getByRole('button', { name: '刷新 测试订阅 A' })
   await refresh.click()
@@ -66,13 +54,25 @@ test('shows subscription usage and keeps the last successful details after a fai
   await refresh.click()
   await expect(first.getByText('拉取失败。')).toBeVisible()
   await expect(first.getByText('1 GiB', { exact: true })).toBeVisible()
-  await page.reload()
-  await expect(first.getByText('1 GiB', { exact: true })).toBeVisible()
-  await expect(first.getByText('尚未检查')).toHaveCount(0)
-  expect(refreshes).toBe(2)
 
-  await page.unroute('**/download/**/JSON?noCache=true')
-  await page.route('**/download/**/JSON?noCache=true', route => route.fulfill({ json: [{ name: 'node-1' }] }))
+  await first.getByRole('button', { name: '自动更新设置 测试订阅 A' }).click()
+  await page.getByRole('spinbutton', { name: '更新间隔（分钟）' }).fill('60')
+  await page.getByRole('dialog').getByRole('button', { name: /^保\s*存$/ }).click()
+  await expect(first.getByText('每 60 分钟')).toBeVisible()
+
+  const nextContext = await browser.newContext()
+  try {
+    const otherPage = await nextContext.newPage()
+    await otherPage.goto(base + '/management/')
+    const otherCard = otherPage.locator('.subscription-card').filter({ hasText: '测试订阅 A' })
+    await expect(otherCard.getByText('1 GiB', { exact: true })).toBeVisible()
+    await expect(otherCard.getByText('拉取失败。')).toBeVisible()
+    await expect(otherCard.getByText('每 60 分钟')).toBeVisible()
+    await expect(otherCard.locator('dd').filter({ hasText: '每 60 分钟' }).locator('time')).toHaveAttribute('datetime', /T/)
+  } finally {
+    await nextContext.close()
+  }
+
   await refresh.click()
   await expect(first.getByText('服务商未提供', { exact: true })).toHaveCount(2)
   await expect(first.getByRole('progressbar')).toHaveCount(0)
