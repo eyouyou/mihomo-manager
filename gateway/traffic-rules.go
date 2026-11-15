@@ -7,11 +7,14 @@ import (
 	"os"
 	"path"
 	"strings"
+
+	"mihomo-manager/internal/rulepublish"
 )
 
 const trafficRulesPath = "/traffic-rules"
 
 type trafficRules struct {
+	publisher rulePublisher
 	client    *http.Client
 	routerURL string
 	directory string
@@ -50,6 +53,17 @@ func (rules trafficRules) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (rules trafficRules) snapshot(w http.ResponseWriter, r *http.Request) {
+	if rules.publisher != "" {
+		result, err := rules.publisher.run(r.Context(), rulepublish.Request{Action: "read"})
+		if err == nil && result.Error == "" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(struct {
+				Rules      []rulepublish.Rule `json:"rules"`
+				CanPublish bool               `json:"canPublish"`
+			}{result.Rules, true})
+			return
+		}
+	}
 	request, err := http.NewRequestWithContext(r.Context(), http.MethodGet, rules.routerURL+"/rules", nil)
 	if err != nil {
 		http.Error(w, "Rules unavailable", http.StatusBadGateway)

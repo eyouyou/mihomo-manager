@@ -92,3 +92,32 @@ test('restores saved drafts after targeted reload and flags a stale router basel
   await expect(page.getByRole('switch', { name: '规则 2 启用状态' })).toBeChecked()
   await expect(page.getByText('现网规则与草稿基线不同。草稿继续保留。')).toBeVisible()
 })
+
+test('asks for confirmation before applying a validated candidate', async ({ page }) => {
+  let previews = 0
+  let applications = 0
+  await page.route('**/traffic-rules/api/rules', async route => {
+    const current = await route.fetch()
+    await route.fulfill({ response: current, json: { ...await current.json(), canPublish: true } })
+  })
+  await page.route('**/traffic-rules/api/preview', route => {
+    previews++
+    return route.fulfill({ json: { ticket: 'a'.repeat(64) } })
+  })
+  await page.route('**/traffic-rules/api/apply', route => {
+    applications++
+    expect(route.request().postDataJSON().ticket).toBe('a'.repeat(64))
+    return route.fulfill({ json: { backup: 'fixture-backup' } })
+  })
+  await page.goto(base + '/management/?view=rules')
+  await page.getByRole('switch', { name: '规则 2 启用状态' }).click()
+  await page.getByRole('button', { name: '校验并预览变更' }).click()
+  await expect(page.getByText('Mihomo 已通过候选配置校验。', { exact: false })).toBeVisible()
+  expect(previews).toBe(1)
+  expect(applications).toBe(0)
+  await page.getByRole('button', { name: '应用到路由器' }).click()
+  expect(applications).toBe(0)
+  await page.getByRole('button', { name: '确认应用' }).click()
+  await expect(page.getByText('热加载和启动配置写入均已完成。回滚备份：fixture-backup')).toBeVisible()
+  expect(applications).toBe(1)
+})

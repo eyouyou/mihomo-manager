@@ -62,7 +62,8 @@ func main() {
 	}
 	rulesClient := *selection.controller
 	rulesClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	rules := trafficRules{client: &rulesClient, routerURL: selection.routerURL, directory: root + "management-ui"}
+	publisher := rulePublisher(os.Getenv("RULE_PUBLISHER_COMMAND"))
+	rules := trafficRules{publisher: publisher, client: &rulesClient, routerURL: selection.routerURL, directory: root + "management-ui"}
 	dashboardIndex, err := os.ReadFile(root + "zashboard/dist/index.html")
 	if err != nil {
 		log.Fatal(err)
@@ -173,6 +174,16 @@ self.addEventListener('activate', event => event.waitUntil((async () => {
 				return
 			}
 			if trafficRulesPage {
+				switch p {
+				case trafficRulesPath + "/api/preview":
+					publisher.serve(w, r, "preview", trustedOrigin)
+					return
+				case trafficRulesPath + "/api/apply":
+					selection.mu.Lock()
+					defer selection.mu.Unlock()
+					publisher.serve(w, r, "apply", trustedOrigin)
+					return
+				}
 				rules.ServeHTTP(w, r)
 				return
 			}
